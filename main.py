@@ -3,12 +3,12 @@ from ref.lut_loader import load_lut
 import torch
 from torchvision import datasets, transforms
 
-lut = load_lut()
+lut = torch.tensor(load_lut())
 model = LeNetMem(lut)
 
 # Load the model from a .pth file
-model_path = 'weights/lenet_mem.pth'
-model.load_state_dict(torch.load(model_path))
+model_path = 'weights/lenet_mnist.pth'
+model.load_state_dict(torch.load(model_path, weights_only=True))
 model.eval()
 
 # Define the MNIST test dataset and dataloader
