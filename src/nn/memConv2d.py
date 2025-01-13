@@ -90,70 +90,19 @@ class memConv2dFunc(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        # Retrieve saved tensors and parameters
-        x, weight, bias, lookup_table = ctx.saved_tensors
-        stride, padding, steps, table_size = (
-            ctx.stride,
-            ctx.padding,
-            ctx.steps,
-            ctx.table_size,
-        )
+                input, weight, bias, _ = ctx.saved_tensors
+        stride = ctx.stride
+        padding = ctx.padding
+        grad_input = grad_weight = grad_bias = None
 
-        # Prepare gradient placeholders
-        grad_x = None
-        grad_weight = None
-        grad_bias = grad_output.sum(dim=(0, 2, 3))
-        grad_lookup_table = None
+        if ctx.needs_input_grad[0]:
+            grad_input = torch.nn.grad.conv2d_input(input.shape, weight, grad_output, stride, padding)
+        if ctx.needs_input_grad[1]:
+            grad_weight = torch.nn.grad.conv2d_weight(input, weight.shape, grad_output, stride, padding) 
+        if bias is not None and ctx.needs_input_grad[2]:
+            grad_bias = grad_output.sum((0,2,3)).squeeze(0)
 
-        # Unfold input and prepare variables
-        x_unfold = F.unfold(
-            x, kernel_size=weight.shape[2], stride=stride, padding=padding
-        )
-        batch_size, num_features, num_patches = x_unfold.shape
-        patch_size = weight.shape[2] * weight.shape[3]
-
-        x_unfold = x_unfold.view(
-            batch_size, num_features // patch_size, patch_size, num_patches
-        )
-
-        # Quantize weights and inputs
-        quantized_weights = map_weight_index(weight, steps)
-        quantized_weights = quantized_weights.view(
-            1, weight.shape[0], weight.shape[1], patch_size
-        ).expand(batch_size, -1, -1, -1)
-
-        quantized_inputs = map_table_index(x_unfold, table_size)
-
-        grad_output = grad_output.view(batch_size, weight.shape[0], -1)
-
-        grad_input = torch.zeros_like(quantized_inputs, dtype=torch.float32)
-        grad_weight = torch.zeros_like(weight, dtype=torch.float32)
-
-        # Compute gradients
-        for o_channel in range(weight.shape[0]):  # Output channels
-            for i_channel in range(weight.shape[1]):  # Input channels
-                weight_value = quantized_weights[:, o_channel, i_channel, :]  # [batch_size, patch_size]
-                input_value = quantized_inputs[:, i_channel, :, :]  # [batch_size, patch_size, num_patches]
-
-                table_indices = (weight_value.unsqueeze(-1), input_value)
-                grad = grad_output[:, o_channel, :].unsqueeze(1)  # [batch_size, 1, num_patches]
-
-                # Accumulate gradients w.r.t input
-                grad_input[:, i_channel, :, :] += (lookup_table.grad[table_indices] * grad).sum(dim=1)
-
-                # Accumulate gradients w.r.t weight
-                grad_weight[o_channel, i_channel, :] += (lookup_table.grad[table_indices] * grad).sum(dim=(0, 2))
-
-        # Fold gradients back to input shape
-        grad_x = F.fold(
-            grad_input.view(batch_size, -1, num_patches),
-            output_size=(x.size(2), x.size(3)),
-            kernel_size=weight.shape[2],
-            stride=stride,
-            padding=padding,
-        )
-
-        return grad_x, grad_weight, grad_bias, grad_lookup_table, None, None, None, None
+        return grad_input, grad_weight, grad_bias, None, None, None, None, None
 
 
 class memConv2d(nn.Conv2d):
