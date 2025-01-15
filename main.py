@@ -1,5 +1,5 @@
 from networks.LeNetMem import LeNetMem
-from ref.lut_loader import load_lut
+from LUTorch.ref.lut_loader import load_lut
 import torch
 from torchvision import datasets, transforms
 

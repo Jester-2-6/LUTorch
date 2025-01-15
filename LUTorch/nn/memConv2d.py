@@ -3,8 +3,8 @@ import torch.nn.functional as F
 import torch.nn as nn
 from torch.autograd import Function
 
-from ref.memristor import V_STEPS, G_STEPS
-from utils.map import map_table_index, map_weight_index
+from LUTorch.ref.memristor import V_STEPS, G_STEPS
+from LUTorch.utils.map import map_table_index, map_weight_index
 
 
 class memConv2dFunc(Function):
@@ -106,6 +106,39 @@ class memConv2dFunc(Function):
 
 
 class memConv2d(nn.Conv2d):
+    """
+    A custom 2D convolutional layer that uses a lookup table for quantized weights.
+
+    Args:
+        in_channels (int): Number of channels in the input image.
+        out_channels (int): Number of channels produced by the convolution.
+        kernel_size (int or tuple): Size of the convolving kernel.
+        lookup_table (torch.Tensor): Precomputed lookup table for quantized weights.
+        stride (int or tuple, optional): Stride of the convolution. Default is 1.
+        padding (int or tuple, optional): Zero-padding added to both sides of the input. Default is 0.
+        steps (int, optional): Number of steps for quantization. Default is G_STEPS.
+        table_size (int, optional): Size of the lookup table. Default is V_STEPS.
+
+    Attributes:
+        in_channels (int): Number of channels in the input image.
+        out_channels (int): Number of channels produced by the convolution.
+        kernel_size (int or tuple): Size of the convolving kernel.
+        stride (tuple): Stride of the convolution.
+        padding (tuple): Zero-padding added to both sides of the input.
+        steps (int): Number of steps for quantization.
+        table_size (int): Size of the lookup table.
+        lookup_table (torch.Tensor): Precomputed lookup table for quantized weights.
+        weight (torch.nn.Parameter): Learnable weights of the module.
+        bias (torch.nn.Parameter): Learnable bias of the module.
+
+    Methods:
+        forward(x):
+            Applies the convolutional layer to the input tensor x using the lookup table for quantized weights.
+            Args:
+                x (torch.Tensor): Input tensor of shape (batch_size, in_channels, height, width).
+            Returns:
+                torch.Tensor: Output tensor after applying the convolution.
+    """
     def __init__(
         self,
         in_channels,

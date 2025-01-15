@@ -3,7 +3,6 @@ import torch.nn as nn
 from torch.autograd import Function
 
 from ref.memristor import V_STEPS, G_STEPS
-from utils.map import map_table_index, map_weight_index
 
 
 class MemLinearFunction(Function):
@@ -57,6 +56,35 @@ class MemLinearFunction(Function):
 
 
 class memLinear(nn.Linear):
+    """
+    A custom linear layer that uses a lookup table for quantized weights.
+
+    Args:
+        in_features (int): Size of each input sample.
+        out_features (int): Size of each output sample.
+        lookup_table (torch.Tensor): A tensor containing the lookup table values.
+        steps (int, optional): Number of steps for quantization. Default is G_STEPS.
+        table_size (int, optional): Size of the lookup table. Default is V_STEPS.
+
+    Attributes:
+        in_features (int): Size of each input sample.
+        out_features (int): Size of each output sample.
+        steps (int): Number of steps for quantization.
+        table_size (int): Size of the lookup table.
+        lookup_table (torch.Tensor): A tensor containing the lookup table values.
+        weight (torch.nn.Parameter): The learnable weights of the module.
+        bias (torch.nn.Parameter): The learnable bias of the module.
+
+    Methods:
+        forward(x):
+            Applies the linear transformation to the input data using the lookup table for quantized weights.
+
+            Args:
+                x (torch.Tensor): Input tensor.
+
+            Returns:
+                torch.Tensor: Output tensor after applying the linear transformation.
+    """
     def __init__(
         self,
         in_features,
