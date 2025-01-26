@@ -7,6 +7,58 @@ from LUTorch.ref.memristor import V_STEPS, G_STEPS
 from LUTorch.utils.map import map_table_index, map_weight_index
 
 
+class MemLinearFunction(Function):
+    @staticmethod
+    def forward(ctx, x, weight, bias, lookup_table, steps, table_size):
+        # Save context for backward
+        ctx.save_for_backward(x, weight, bias, lookup_table)
+        ctx.steps = steps
+        ctx.table_size = table_size
+
+        # Quantize weights and inputs
+        quantized_weights = torch.round((weight + 1) * (steps - 1) / 2).long()
+        quantized_weights = torch.clamp(quantized_weights, 0, steps - 1)
+
+        quantized_inputs = torch.round((x + 1) * (table_size - 1) / 2).long()
+        quantized_inputs = torch.clamp(quantized_inputs, 0, table_size - 1)
+
+        # Vectorized lookup table access
+        weight_expanded = quantized_weights.unsqueeze(0).expand(x.size(0), -1, -1)
+        input_expanded = quantized_inputs.unsqueeze(1).expand(-1, weight.size(0), -1)
+
+        # Gather lookup table values
+        table_values = lookup_table[weight_expanded, input_expanded]
+
+        # Sum along input features
+        output = table_values.sum(dim=2)
+
+        # Add bias
+        if bias is not None:
+            output += bias
+
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, weight, bias, lookup_table = ctx.saved_tensors
+        steps = ctx.steps
+        table_size = ctx.table_size
+
+        # Recompute quantized weights and inputs
+        quantized_weights = torch.round((weight + 1) * (steps - 1) / 2).long()
+        quantized_weights = torch.clamp(quantized_weights, 0, steps - 1)
+        quantized_inputs = torch.round((x + 1) * (table_size - 1) / 2).long()
+        quantized_inputs = torch.clamp(quantized_inputs, 0, table_size - 1)
+
+        # Use differentiable operations to compute gradients
+        grad_x = grad_output @ weight
+        grad_weight = grad_output.t() @ x
+        grad_bias = grad_output.sum(0)
+        grad_lookup_table = None
+
+        return grad_x, grad_weight, grad_bias, grad_lookup_table, None, None
+
+
 class memConv2dFunc(Function):
     @staticmethod
     def forward(ctx, x, weight, bias, lookup_table, stride, padding, steps, table_size):
@@ -96,13 +148,74 @@ class memConv2dFunc(Function):
         grad_input = grad_weight = grad_bias = None
 
         if ctx.needs_input_grad[0]:
-            grad_input = torch.nn.grad.conv2d_input(input.shape, weight, grad_output, stride, padding)
+            grad_input = torch.nn.grad.conv2d_input(
+                input.shape, weight, grad_output, stride, padding
+            )
         if ctx.needs_input_grad[1]:
-            grad_weight = torch.nn.grad.conv2d_weight(input, weight.shape, grad_output, stride, padding) 
+            grad_weight = torch.nn.grad.conv2d_weight(
+                input, weight.shape, grad_output, stride, padding
+            )
         if bias is not None and ctx.needs_input_grad[2]:
-            grad_bias = grad_output.sum((0,2,3)).squeeze(0)
+            grad_bias = grad_output.sum((0, 2, 3)).squeeze(0)
 
         return grad_input, grad_weight, grad_bias, None, None, None, None, None
+
+
+class memLinear(nn.Linear):
+    """
+    A custom linear layer that uses a lookup table for quantized weights.
+
+    Args:
+        in_features (int): Size of each input sample.
+        out_features (int): Size of each output sample.
+        lookup_table (torch.Tensor): A tensor containing the lookup table values.
+        steps (int, optional): Number of steps for quantization. Default is G_STEPS.
+        table_size (int, optional): Size of the lookup table. Default is V_STEPS.
+
+    Attributes:
+        in_features (int): Size of each input sample.
+        out_features (int): Size of each output sample.
+        steps (int): Number of steps for quantization.
+        table_size (int): Size of the lookup table.
+        lookup_table (torch.Tensor): A tensor containing the lookup table values.
+        weight (torch.nn.Parameter): The learnable weights of the module.
+        bias (torch.nn.Parameter): The learnable bias of the module.
+
+    Methods:
+        forward(x):
+            Applies the linear transformation to the input data using the lookup table for quantized weights.
+
+            Args:
+                x (torch.Tensor): Input tensor.
+
+            Returns:
+                torch.Tensor: Output tensor after applying the linear transformation.
+    """
+
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        lookup_table,
+        steps=G_STEPS,
+        table_size=V_STEPS,
+    ):
+        super(memLinear, self).__init__(in_features, out_features)
+        self.in_features = in_features
+        self.out_features = out_features
+        self.steps = steps
+        self.table_size = table_size
+        self.lookup_table = lookup_table.detach()
+        self.lookup_table.requires_grad = False
+
+        # Initialize the weights (quantized to a discrete range)
+        self.weight = nn.Parameter(torch.randn(out_features, in_features))
+        self.bias = nn.Parameter(torch.zeros(out_features))
+
+    def forward(self, x):
+        return MemLinearFunction.apply(
+            x, self.weight, self.bias, self.lookup_table, self.steps, self.table_size
+        )
 
 
 class memConv2d(nn.Conv2d):
@@ -139,6 +252,7 @@ class memConv2d(nn.Conv2d):
             Returns:
                 torch.Tensor: Output tensor after applying the convolution.
     """
+
     def __init__(
         self,
         in_channels,
@@ -183,3 +297,11 @@ class memConv2d(nn.Conv2d):
             self.steps,
             self.table_size,
         )
+
+
+class memReLu(nn.ReLU):
+    def __init__(self):
+        super(memReLu, self).__init__()
+
+    def forward(self, x):
+        return torch.clamp(x, 0, 1)
