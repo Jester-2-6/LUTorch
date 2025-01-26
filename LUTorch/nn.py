@@ -68,75 +68,43 @@ class memConv2dFunc(Function):
         ctx.stride = stride
         ctx.padding = padding
 
+        # Unfold input into patches
         x_unfold = F.unfold(
             x, kernel_size=weight.shape[2], stride=stride, padding=padding
         )
-
-        # Shape of x_unfold: (batch_size, in_channels * kernel_size^2, num_patches)
         batch_size, num_features, num_patches = x_unfold.shape
         patch_size = weight.shape[2] * weight.shape[3]
 
-        # Reshape the input patches to: (batch_size, num_patches, in_channels, kernel_size * kernel_size)
+        # Reshape input patches
         x_unfold = x_unfold.view(
             batch_size, num_features // patch_size, patch_size, num_patches
         )
 
-        # Quantize the weights to the number of steps (e.g., 256 levels between [-1, 1])
+        # Quantize weights and inputs
         quantized_weights = map_weight_index(weight, steps)
         quantized_weights = quantized_weights.view(
             1, weight.shape[0], weight.shape[1], patch_size
-        ).expand(batch_size, -1, -1, -1)
+        )
+        quantized_weights = quantized_weights.expand(batch_size, -1, -1, -1)
+        quantized_weights = quantized_weights.clamp(0, lookup_table.size(0) - 1).long()
 
-        # Quantize the inputs to the table_size (e.g., 100 levels between [-1, 1])
         quantized_inputs = map_table_index(x_unfold, table_size)
+        quantized_inputs = quantized_inputs.clamp(0, lookup_table.size(1) - 1).long()
 
-        # Perform lookup table operations for each patch
-        output = torch.zeros(batch_size, weight.shape[0], num_patches, device=x.device)
+        # Prepare indices for vectorized lookup
+        weight_indices = quantized_weights.unsqueeze(-1)  # (B, O, I, P, 1)
+        input_indices = quantized_inputs.unsqueeze(1)  # (B, 1, I, P, N)
 
-        # Iterate through the output channels
-        for o_channel in range(weight.shape[0]):  # Output channels
-            # Iterate through input channels
-            for i_channel in range(weight.shape[1]):  # Input channels
-                for patch_id in range(num_patches):  # Iterate through each patch size
-                    # Quantized inputs shape:  torch.Size([64, 6, 25, 64])
-                    # Quantized weights shape:  torch.Size([64, 16, 6, 25])
-                    # Get the current quantized weight for the given output channel and patch
-                    weight_value = quantized_weights[
-                        :, o_channel, i_channel, :
-                    ]  # Shape: [(64, 25)]
+        # Perform batched lookups and sum over input channels and patch dimensions
+        table_values = lookup_table[weight_indices, input_indices]
+        output = table_values.sum(dim=(2, 3))  # Sum over I and P → (B, O, N)
 
-                    # Ensure weight_value is within valid range for lookup_table
-                    weight_value = weight_value.clamp(
-                        0, lookup_table.size(0) - 1
-                    ).long()  # Shape: [64]
-
-                    # Access the quantized input values for this input channel and all patches
-                    quantized_input_values = quantized_inputs[
-                        :, i_channel, :, patch_id
-                    ].squeeze(-1)  # Shape: [64, 25]
-
-                    # Prepare the input for the lookup table
-                    # Ensure weight_value is of shape [64, 1] for proper broadcasting
-
-                    # Perform lookup using weight_value and quantized_input_values
-                    # Accessing the lookup table
-                    table_values = lookup_table[weight_value, quantized_input_values]
-
-                    # Now we need to accumulate across the second dimension of table_values
-                    # Sum the table values across the patch dimension (dim=1)
-                    summed_values = table_values.sum(dim=1)  # Shape: [64]
-
-                    # Accumulate values into the output tensor for this output channel and patch
-                    output[:, o_channel, patch_id] += summed_values
-
+        # Reshape output and add bias
         out_frame_size = (x.size(2) + 2 * padding - weight.shape[2]) // stride + 1
-
-        output = output.reshape(
+        output = output.view(
             batch_size, weight.shape[0], out_frame_size, out_frame_size
         )
-
-        # Add bias
-        output += bias.view(1, weight.shape[0], 1, 1)
+        output += bias.view(1, -1, 1, 1)
 
         return output
 
@@ -147,6 +115,7 @@ class memConv2dFunc(Function):
         padding = ctx.padding
         grad_input = grad_weight = grad_bias = None
 
+        # Compute gradients using PyTorch's built-in functions
         if ctx.needs_input_grad[0]:
             grad_input = torch.nn.grad.conv2d_input(
                 input.shape, weight, grad_output, stride, padding
@@ -155,8 +124,8 @@ class memConv2dFunc(Function):
             grad_weight = torch.nn.grad.conv2d_weight(
                 input, weight.shape, grad_output, stride, padding
             )
-        if bias is not None and ctx.needs_input_grad[2]:
-            grad_bias = grad_output.sum((0, 2, 3)).squeeze(0)
+        if ctx.needs_input_grad[2]:
+            grad_bias = grad_output.sum((0, 2, 3))
 
         return grad_input, grad_weight, grad_bias, None, None, None, None, None
 

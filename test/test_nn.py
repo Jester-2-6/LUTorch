@@ -115,7 +115,7 @@ class TestMemReLU(unittest.TestCase):
 
 class TestMemConv2d(unittest.TestCase):
     def setUp(self):
-        self.x = torch.randn(1, 2, 4, 4, dtype=torch.float32)
+        self.x = torch.randn(1, 2, 4, 4, dtype=torch.float32) / 3
         self.weight = torch.randn(1, 2, 2, 2, dtype=torch.float32)
         self.bias = torch.tensor([0.1], dtype=torch.float32)
         self.lookup_table = torch.tensor(load_lut(), dtype=torch.float32)
@@ -133,18 +133,28 @@ class TestMemConv2d(unittest.TestCase):
     def test_forward(self):
         torch_output = self.torch_conv2d(self.x)
         mem_output = self.mem_conv2d(self.x)
-        
+
         print(torch_output)
         print(mem_output)
         self.assertTrue(torch.allclose(torch_output, mem_output, atol=TOLERANCE))
 
-    # def test_backward(self):
-    #     torch_output = self.torch_conv2d(self.x)
-    #     mem_output = self.mem_conv2d(self.x)
-    #     torch_output.sum().backward()
-    #     mem_output.sum().backward()
-    #     self.assertTrue(torch.allclose(self.torch_conv2d.weight.grad, self.mem_conv2d.weight.grad, atol=TOLERANCE))
-    #     self.assertTrue(torch.allclose(self.torch_conv2d.bias.grad, self.mem_conv2d.bias.grad, atol=TOLERANCE))
+    def test_backward(self):
+        torch_output = self.torch_conv2d(self.x)
+        mem_output = self.mem_conv2d(self.x)
+        torch_output.sum().backward()
+        mem_output.sum().backward()
+        self.assertTrue(
+            torch.allclose(
+                self.torch_conv2d.weight.grad,
+                self.mem_conv2d.weight.grad,
+                atol=TOLERANCE,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                self.torch_conv2d.bias.grad, self.mem_conv2d.bias.grad, atol=TOLERANCE
+            )
+        )
 
 
 if __name__ == "__main__":
