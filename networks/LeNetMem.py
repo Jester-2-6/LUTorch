@@ -3,9 +3,9 @@ import sys
 
 # adding Folder_2 to the system path
 sys.path.insert(0, "..")
-from nn.memConv2d import memConv2d
-from nn.memLinear import memLinear
-from nn.memReLu import memReLu
+from LUTorch.nn import memConv2d
+from LUTorch.nn import memLinear
+from LUTorch.nn import memReLu
 
 class LeNetMem(torch.nn.Module):
     def __init__(self, lut):
